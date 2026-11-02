@@ -46,6 +46,7 @@ class Bot {
   private state: BotState = 'idle';
   private error: string | undefined;
   private joinSeconds: number | undefined;
+  private missingSelectors: string[] | undefined;
   private browser: Browser | undefined;
   private page: Page | undefined;
   private lastControllerContact = Date.now();
@@ -71,6 +72,7 @@ class Bot {
       ...(this.error ? { error: this.error } : {}),
       ...(this.joinSeconds !== undefined ? { joinSeconds: this.joinSeconds } : {}),
       ...(sample ? { sample } : {}),
+      ...(this.missingSelectors ? { missingSelectors: this.missingSelectors } : {}),
     };
     return this.post(`/internal/runs/${runId}/heartbeat`, body);
   }
@@ -91,7 +93,7 @@ class Bot {
       });
       await context.addInitScript(trackPeerConnections);
       this.page = await context.newPage();
-      await joinMeeting(this.page, a.joinUrl, a.role);
+      this.missingSelectors = await joinMeeting(this.page, a.joinUrl, a.role, { probe: a.probe });
       this.joinSeconds = (Date.now() - started) / 1000;
       this.state = 'joined';
       if (a.role.nextSlideEverySeconds) {

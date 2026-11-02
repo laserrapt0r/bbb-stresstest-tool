@@ -7,6 +7,8 @@ export interface Assignment {
   joinUrl: string;
   role: Role;
   network: BotNetwork;
+  /** Self-test: also report expected UI elements that are missing. */
+  probe?: boolean;
 }
 
 export interface BotNetwork {
@@ -42,6 +44,7 @@ export interface Heartbeat {
   error?: string;
   joinSeconds?: number;
   sample?: BotSample;
+  missingSelectors?: string[];
 }
 
 export type BotCommand =

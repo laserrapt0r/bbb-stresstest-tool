@@ -1,6 +1,6 @@
 image:
-  controller: registry.example.org/bbb-stress/controller:0.1.0
-  bot: registry.example.org/bbb-stress/bot:0.1.0
+  controller: registry.example.org/bbb-stress/controller:0.3.0
+  bot: registry.example.org/bbb-stress/bot:0.3.0
   pullPolicy: IfNotPresent
   pullSecrets: []
 
@@ -14,7 +14,7 @@ config:
   maxBotsPerRun: 500
   botStartTimeoutSeconds: 600
   prometheusUrl: ""     # e.g. http://prometheus-operated.cattle-monitoring-system:9090
-  grafanaUrl: ""
+  grafanaUrl: ""        # dashboard URL, e.g. https://grafana.example.org/d/bbb-stress
   targets: {}
   # targets:
   #   testserver:
@@ -66,3 +66,11 @@ ingress:
 serviceMonitor:
   enabled: false
   labels: {}
+
+# Grafana dashboard as a ConfigMap for the Grafana sidecar. In Rancher Monitoring the sidecar
+# usually watches the namespace cattle-dashboards. Leave namespace empty for the release namespace.
+grafanaDashboard:
+  enabled: false
+  namespace: ""
+  labels:
+    grafana_dashboard: "1"

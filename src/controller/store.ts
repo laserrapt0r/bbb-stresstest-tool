@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { parse } from 'yaml';
 import { scenarioSchema, type Scenario } from '../shared/scenario.js';
 import type { RunRecord } from './runner.js';
+import type { SeriesRecord } from './series.js';
 
 const safeName = (name: string) => name.replace(/[^a-zA-Z0-9._-]/g, '_');
 
@@ -18,6 +19,7 @@ export class Store {
   async init(): Promise<void> {
     await mkdir(join(this.dataDir, 'runs'), { recursive: true });
     await mkdir(join(this.dataDir, 'scenarios'), { recursive: true });
+    await mkdir(join(this.dataDir, 'series'), { recursive: true });
   }
 
   /** Writes of one file run one after the other: a run saves itself from several places. */
@@ -41,6 +43,17 @@ export class Store {
     const files = (await readdir(dir)).filter((f) => f.endsWith('.json'));
     const runs = await Promise.all(files.map(async (f) => JSON.parse(await readFile(join(dir, f), 'utf8')) as RunRecord));
     return runs.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  saveSeries(series: SeriesRecord): Promise<void> {
+    return this.writeJson(join(this.dataDir, 'series', `${series.id}.json`), series);
+  }
+
+  async listSeries(): Promise<SeriesRecord[]> {
+    const dir = join(this.dataDir, 'series');
+    const files = (await readdir(dir)).filter((f) => f.endsWith('.json'));
+    const series = await Promise.all(files.map(async (f) => JSON.parse(await readFile(join(dir, f), 'utf8')) as SeriesRecord));
+    return series.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
   async listScenarios(): Promise<{ scenario: Scenario; builtin: boolean }[]> {

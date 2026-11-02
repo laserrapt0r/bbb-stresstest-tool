@@ -1,25 +1,7 @@
 import type { Page } from 'playwright';
 import type { Role } from '../shared/scenario.js';
 
-/**
- * Selectors from BigBlueButton's own Playwright suite, identical in v3.0.40 and v4.0.1
- * unless both variants are listed. Keep this list as the only place that knows the UI.
- */
-export const ui = {
-  ready: 'section#ActionsBar',
-  audioModal: 'div[data-test="audioModal"], div[data-testid="audioModal"]',
-  listenOnlyButton: 'button[data-test="listenOnlyBtn"]',
-  microphoneButton: 'button[data-test="microphoneBtn"]',
-  audioJoined: 'button[data-test="audioDropdownMenu"]',
-  unmuteMic: 'button[data-test="unmuteMicButton"]',
-  muteMic: 'button[data-test="muteMicButton"]',
-  joinVideo: 'button[data-test="joinVideo"]',
-  startSharingWebcam: 'button[data-test="startSharingWebcam"]',
-  webcamJoined: 'button[data-test="leaveVideo"]',
-  startScreenShare: 'button[data-test="startScreenShare"]',
-  screenShareJoined: 'button[data-test="stopScreenShare"]',
-  nextSlide: 'button[data-test="nextSlide"]',
-} as const;
+import { ui } from './selectors.js';
 
 const MEDIA_TIMEOUT_MS = 90_000;
 
@@ -60,14 +42,48 @@ async function connectScreenShare(page: Page): Promise<void> {
   await page.locator(ui.screenShareJoined).waitFor({ timeout: MEDIA_TIMEOUT_MS });
 }
 
+/** Names the failed stage: "timeout" alone says nothing about which part of BBB changed. */
+async function stage(name: string, action: () => Promise<void>): Promise<void> {
+  try {
+    await action();
+  } catch (err) {
+    throw new Error(`${name}: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);
+  }
+}
+
+/** Elements this role must see while no screen is shared. Empty result means all were found. */
+async function missingElements(page: Page, role: Role): Promise<string[]> {
+  // The camera button changes once the camera runs.
+  const expected: (keyof typeof ui)[] = ['ready', role.webcam ? 'webcamJoined' : 'joinVideo'];
+  if (role.audio !== 'none') expected.push('audioJoined');
+  if (role.audio === 'microphone') expected.push('muteMic');
+  if (role.screenshare) expected.push('startScreenShare', 'nextSlide');
+  const missing: string[] = [];
+  for (const name of expected) {
+    const found = await page.locator(ui[name]).first().waitFor({ timeout: 15_000 }).then(() => true, () => false);
+    if (!found) missing.push(name);
+  }
+  return missing;
+}
+
+export interface JoinOptions {
+  /** Also reports expected UI elements that are missing. Only the self-test needs this. */
+  probe?: boolean | undefined;
+}
+
 /** Resolves when all media of the role are confirmed by the client UI. */
-export async function joinMeeting(page: Page, joinUrl: string, role: Role): Promise<void> {
-  await page.goto(joinUrl, { waitUntil: 'domcontentloaded', timeout: MEDIA_TIMEOUT_MS });
-  await page.locator(ui.ready).waitFor({ timeout: MEDIA_TIMEOUT_MS });
-  await connectAudio(page, role);
-  if (role.audio === 'microphone' && !role.muted) await unmute(page);
-  if (role.webcam) await connectWebcam(page);
-  if (role.screenshare) await connectScreenShare(page);
+export async function joinMeeting(page: Page, joinUrl: string, role: Role, options: JoinOptions = {}): Promise<string[]> {
+  await stage('open client', async () => {
+    await page.goto(joinUrl, { waitUntil: 'domcontentloaded', timeout: MEDIA_TIMEOUT_MS });
+    await page.locator(ui.ready).waitFor({ timeout: MEDIA_TIMEOUT_MS });
+  });
+  await stage('audio', () => connectAudio(page, role));
+  if (role.audio === 'microphone' && !role.muted) await stage('unmute', () => unmute(page));
+  if (role.webcam) await stage('webcam', () => connectWebcam(page));
+  // Before the screen share, which replaces the presentation and its controls.
+  const missing = options.probe ? await missingElements(page, role) : [];
+  if (role.screenshare) await stage('screen share', () => connectScreenShare(page));
+  return missing;
 }
 
 /** Slide changes are background activity: a failure gets logged and must not end the bot. */

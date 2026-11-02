@@ -75,6 +75,110 @@ slo:
       max: 85
 ```
 
+## Reports and results
+
+### Control tool
+
+![Scenario form of the web UI](docs/screenshots/en-scenario.png)
+
+### One run
+
+Each finished run shows the stable user count, charts across the load steps, the table of all measurements, the log
+and its downloads. Each chart holds one measure against the users per meeting. A dashed line marks the limit, and a
+ring marks a step that violated a limit. Moving the pointer or using the arrow keys on a chart shows the values.
+
+![Result of a run with charts and log](docs/screenshots/en-run.png)
+
+- **HTML report:** One self-contained file with all data, charts and the log. It works offline and prints well, and
+  can be attached to a ticket or mail.
+- **CSV:** The step values for Excel or LibreOffice.
+- **Prometheus rules:** Each rule from `slo.prometheus` gets its own chart.
+- **Single load step:** A run in `fixed` mode has no trend, so its values appear as a table without charts.
+
+![Downloaded HTML report](docs/screenshots/en-report.png)
+
+### Comparing runs
+
+Select 2 to 8 runs and choose *Compare selection*. All runs share one chart per measure, each with its own color and
+marker shape. A limit is only drawn if all compared runs share it. The comparison is available as an HTML report too.
+
+![Comparison of two runs](docs/screenshots/en-compare.png)
+
+### Test series
+
+A series runs saved scenarios one after the other with a pause in between. Before the first run, all scenarios are
+checked, so a broken one does not fail after hours. By default, a series ends when a run ends with an error. *Limit
+found* and *invalid* do not stop it. Afterwards, *Compare runs* opens the comparison.
+
+![Test series form](docs/screenshots/en-series.png)
+
+With `backend.type: external`, bots must be started for each run of a series, which is meant for tests. On Kubernetes
+the controller does this by itself.
+
+The screenshots use invented sample data from [dev/screenshots/](dev/screenshots/), not measurements.
+
+### Prometheus and Grafana
+
+`/metrics` delivers rolling values of the last minute per run, with the labels `run`, `scenario` and `target`. The
+values exist while a run is active and for 30 seconds after it.
+
+| Metric | Meaning |
+|---|---|
+| `bbb_stress_users_per_meeting` | Current load step |
+| `bbb_stress_stable_users` | Highest step that passed |
+| `bbb_stress_bots{state}` | Bots by state |
+| `bbb_stress_audio_loss_percent`, `bbb_stress_video_loss_percent` | Packet loss |
+| `bbb_stress_jitter_p95_milliseconds`, `bbb_stress_rtt_p95_milliseconds` | Jitter and round trip time |
+| `bbb_stress_freezes_per_minute` | Video freezes per stream and minute |
+| `bbb_stress_join_p95_seconds`, `bbb_stress_join_failure_percent` | Joins |
+| `bbb_stress_bot_cpu_p95_percent`, `bbb_stress_bot_throttled_p95_percent` | Load of the generators |
+
+The chart contains a [Grafana dashboard](deploy/helm/bbb-stress-tool/dashboards/bbb-stress.json) with these values and
+the BBB server's CPU and network from the node exporter on one timeline. To install it:
+
+```sh
+helm upgrade --install bbb-stress deploy/helm/bbb-stress-tool -n NAMESPACE --reuse-values \
+  --set serviceMonitor.enabled=true \
+  --set grafanaDashboard.enabled=true --set grafanaDashboard.namespace=cattle-dashboards
+```
+
+The Grafana sidecar picks up ConfigMaps with the label `grafana_dashboard: "1"`. Alternatively, import the JSON file by
+hand. With `grafanaUrl: https://grafana.example.org/d/bbb-stress` in the configuration, each run gets an *Open in
+Grafana* link with the matching time range and run.
+
+## Self-test and selector check
+
+### Self-test
+
+Before many pods start, two bots prove the whole path to a target. The self-test takes about a minute and runs on
+*Self-test* in the UI. Start and series run it first by default, and if it fails, no load test starts.
+
+| Check | What it proves |
+|---|---|
+| Bots started, meeting created | Pods run, API URL, secret and proxy work |
+| Join through the BBB client | The client loads, the stage in the error names the failed spot |
+| UI elements found | The selectors of the bots match this server |
+| Audio and video received | Media really flows in both directions |
+| BBB reports participants/cameras | The server sees the bots as expected |
+| Media path | With `webrtcIpPolicy` set, only `relay` counts as passed |
+| Bot CPU | The bots have enough resources |
+
+![Result of a self-test](docs/screenshots/en-selftest.png)
+
+### Selector check
+
+BBB changes its client between releases. `scripts/check-selectors.mjs` compares the selectors and join parameters of
+the bots with BBB's official Playwright tests, without needing a server:
+
+```sh
+node scripts/check-selectors.mjs                 # newest stable release of each line from 3.0 on
+node scripts/check-selectors.mjs v3.0.40 v4.0.1  # specific releases
+```
+
+It exits with an error if something is missing. To run it every Monday and when the selectors change, copy
+[dev/github-workflows/selector-check.yml](dev/github-workflows/selector-check.yml) to `.github/workflows/`. Pushing that
+needs a token with the *Workflows* permission. The selectors live in [src/bot/selectors.ts](src/bot/selectors.ts).
+
 ## Networks without UDP
 
 Media runs over TURN through the forward proxy. Configure it per target:
@@ -95,12 +199,12 @@ Tested with the real client in a network whose only way out was a Squid proxy:
 | Version | Media path | Ports at the proxy | Server change |
 |---|---|---|---|
 | BBB 4.0.1 (LiveKit) | `relay/tls` | 443 | None, the built-in TURN was enough |
-| BBB 3.0.40 (mediasoup, FreeSWITCH) | `relay/tcp` | 443 and the TURN port | Add a TURN server to `turn-stun-servers.xml` |
+| BBB 3.0.40 (mediasoup, FreeSWITCH) | `relay/tls` | 443 | None, the built-in TURN was enough |
 
 Requirements:
 
-1. **BBB offers TURN over TCP or TLS:** In BBB 3 this is set in `turn-stun-servers.xml`. Installing with
-   `-c turn.example.org:SECRET` sets it up for an external coturn.
+1. **BBB offers TURN over TLS:** A default `bbb-install` provides `turns:HOST:443` in both versions. Check this if
+   your server uses a custom setup. The self-test shows the media path.
 2. **The proxy allows CONNECT:** The hosts of BBB, Scalelite and TURN and their ports must be allowed, also for
    ports other than 443.
 3. **No TLS inspection:** The proxy must not break open TURN connections. This was not tested and is likely to
@@ -123,7 +227,7 @@ report shows the media path per step. For pure capacity statements about BBB, op
 ## BBB 3 and BBB 4
 
 The bot selectors come from the official Playwright tests and were checked against real servers with v3.0.40 and
-v4.0.1. They live only in [src/bot/client.ts](src/bot/client.ts). v3 and v4 are not directly comparable, because
+v4.0.1. They live only in [src/bot/selectors.ts](src/bot/selectors.ts). v3 and v4 are not directly comparable, because
 v4 uses LiveKit instead of mediasoup and FreeSWITCH by default. For a fair comparison, a v4 scenario can select
 the old media path through `createParams`:
 
@@ -140,10 +244,10 @@ meeting:
 ### 1. Build the images
 
 ```sh
-docker build --target controller -t REGISTRY/bbb-stress/controller:0.1.0 .
-docker build --target bot -t REGISTRY/bbb-stress/bot:0.1.0 .
-docker push REGISTRY/bbb-stress/controller:0.1.0
-docker push REGISTRY/bbb-stress/bot:0.1.0
+docker build --target controller -t REGISTRY/bbb-stress/controller:0.3.0 .
+docker build --target bot -t REGISTRY/bbb-stress/bot:0.3.0 .
+docker push REGISTRY/bbb-stress/controller:0.3.0
+docker push REGISTRY/bbb-stress/bot:0.3.0
 ```
 
 ### 2. Create the configuration as a secret
@@ -165,7 +269,7 @@ targets:
 backend:
   type: kubernetes
   namespace: NAMESPACE
-  image: REGISTRY/bbb-stress/bot:0.1.0
+  image: REGISTRY/bbb-stress/bot:0.3.0
 ```
 
 ```sh
@@ -180,8 +284,8 @@ If BBB uses a certificate of an internal CA, add the CA as a secret with the key
 ```sh
 helm upgrade --install bbb-stress deploy/helm/bbb-stress-tool -n NAMESPACE \
   --set existingSecret=bbb-stress-config \
-  --set image.controller=REGISTRY/bbb-stress/controller:0.1.0 \
-  --set image.bot=REGISTRY/bbb-stress/bot:0.1.0 \
+  --set image.controller=REGISTRY/bbb-stress/controller:0.3.0 \
+  --set image.bot=REGISTRY/bbb-stress/bot:0.3.0 \
   --set ingress.enabled=true --set ingress.host=bbb-stress.example.org
 ```
 
@@ -216,12 +320,13 @@ With `backend.type: external`, the controller starts no pods. Bots can then run 
 ## Status
 
 Tested against real servers with BBB 3.0.40 and 4.0.1 with up to 6 bots, directly and through a forward proxy
-without a direct route. PDF upload and slide changes were tested on 4.0.1 only.
+without a direct route. The self-test also ran there, including a target with a wrong secret. PDF upload and slide changes were tested on 4.0.1 only.
 
 Not tested yet:
 
 - Operation on a real Kubernetes cluster. The chart was only checked statically, and the `restricted` constraints
-  were reproduced in containers.
+  were reproduced in containers. This includes the Grafana dashboard, which was never loaded into a real Grafana.
+- Reports, comparison, test series and `/metrics` were tested against `fake-bbb` only, not against a real BBB server.
 - Large runs, Scalelite, proxy authentication and TLS inspection at the proxy.
 - Slide changes on BBB's default PDF: In the only run, the slide stayed on page 1. On a custom PDF it worked.
 
@@ -235,6 +340,9 @@ dev/node.sh npm test
 dev/node.sh npm run typecheck
 dev/check-chart.sh                 # check the chart statically
 dev/e2e.sh "$PWD/dev/e2e-config.yaml" dev/e2e-scenario.json 3   # run against fake-bbb
+dev/e2e-series.sh "$PWD/dev/e2e-config.yaml" dev/e2e-scenario.json   # test series against fake-bbb
+dev/screenshots/run.sh             # check the web UI, write docs/screenshots
+node scripts/check-selectors.mjs   # compare the selectors with BBB's tests
 dev/proxy-spike/run.sh             # WebRTC through a forward proxy
 ```
 

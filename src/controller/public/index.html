@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BBB Lasttest</title>
+<link rel="stylesheet" href="/charts.css">
+<script src="/charts.js"></script>
 <style>
 :root{--bg:#f6f7f9;--card:#fff;--text:#1c2430;--muted:#5e6b7a;--line:#d9dfe6;--accent:#1f5fbf;--ok:#16794a;--bad:#b3261e;--warn:#9a6200}
 @media (prefers-color-scheme:dark){:root{--bg:#14181e;--card:#1d232b;--text:#e7ebf0;--muted:#9aa6b4;--line:#333c47;--accent:#7ab0ff;--ok:#5fd29c;--bad:#ff8a80;--warn:#f0bd66}}
@@ -18,6 +20,11 @@ button.primary{background:var(--accent);border-color:var(--accent);color:var(--c
 table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}th{color:var(--muted);font-weight:500}
 .pass{color:var(--ok)}.fail{color:var(--bad)}.invalid{color:var(--warn)}.muted{color:var(--muted)}.hidden{display:none}
 pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;margin:8px 0 0}
+.runrow{display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px solid var(--line)}.runrow input{margin-top:5px}.runrow details{flex:1;min-width:0}
+.runbody{padding-top:10px}.runbody h3{font-size:14px;margin:14px 0 6px}.viz-root{position:relative}
+.seriesList{margin:8px 0;padding-left:22px}.seriesList li{padding:3px 0}.seriesList button{padding:1px 8px;margin-left:4px}
+button:disabled{opacity:.5;cursor:not-allowed}.log{max-height:280px;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px}
+a.button{padding:7px 12px;border:1px solid var(--line);border-radius:6px;color:var(--text);text-decoration:none}
 </style>
 </head>
 <body><main>
@@ -69,13 +76,33 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;margin:8px 0 0}
   </details>
 
   <div class="row" style="margin-top:16px">
-    <button onclick="preflight()" data-t="Prüfen">Prüfen</button><button class="primary" onclick="startRun()" data-t="Test starten">Test starten</button><button onclick="saveScenario()" data-t="Szenario speichern">Szenario speichern</button>
+    <button onclick="preflight()" data-t="Prüfen">Prüfen</button><button onclick="selfTest()" data-t="Selbsttest">Selbsttest</button><button class="primary" onclick="startRun()" data-t="Test starten">Test starten</button><button onclick="saveScenario()" data-t="Szenario speichern">Szenario speichern</button><button class="danger" id="deleteScenario" onclick="deleteScenario()" data-t="Vorlage löschen">Vorlage löschen</button>
   </div>
+  <label class="row" style="margin-top:10px"><input id="runSelfTest" type="checkbox" checked><span data-t="Vor dem Start Selbsttest mit 2 Bots ausführen">Vor dem Start Selbsttest mit 2 Bots ausführen</span></label>
   <pre id="scenarioResult"></pre>
 </section>
 
+<section class="card"><h2 data-t="Testserie">Testserie</h2>
+  <p class="muted" data-t="Führt mehrere gespeicherte Szenarien nacheinander aus.">Führt mehrere gespeicherte Szenarien nacheinander aus.</p>
+  <div class="grid">
+    <label><span data-t="Name der Serie">Name der Serie</span><input id="seriesName"></label>
+    <label><span data-t="Pause zwischen den Läufen (s)">Pause zwischen den Läufen (s)</span><input id="seriesPause" type="number" min="0" value="120"></label>
+    <label><span data-t="Szenario hinzufügen">Szenario hinzufügen</span><select id="seriesAdd" onchange="addToSeries()"></select></label>
+  </div>
+  <ol class="seriesList" id="seriesList"></ol>
+  <label class="row" style="margin:8px 0"><input id="seriesContinue" type="checkbox"><span data-t="Nach einem Fehler weitermachen">Nach einem Fehler weitermachen</span></label>
+  <label class="row" style="margin:8px 0"><input id="seriesSelfTest" type="checkbox" checked><span data-t="Vor dem Start Selbsttest mit 2 Bots ausführen">Vor dem Start Selbsttest mit 2 Bots ausführen</span></label>
+  <div class="row"><button class="primary" onclick="startSeries()" data-t="Serie starten">Serie starten</button></div>
+  <pre id="seriesResult"></pre>
+  <div id="seriesRuns" class="scroll" style="margin-top:8px"></div>
+</section>
+
 <section class="card" id="liveCard"><h2 data-t="Aktueller Lauf">Aktueller Lauf</h2><div id="live" class="muted"></div></section>
-<section class="card"><h2 data-t="Ergebnisse">Ergebnisse</h2><div id="runs" class="scroll"></div></section>
+<section class="card"><h2 data-t="Ergebnisse">Ergebnisse</h2>
+  <div class="row" style="margin-bottom:8px"><button id="compareButton" onclick="compareSelected()" disabled data-t="Auswahl vergleichen">Auswahl vergleichen</button><span class="muted" id="compareHint"></span></div>
+  <div id="runs"></div>
+</section>
+<section class="card hidden" id="compareCard"><div class="row" style="justify-content:space-between"><h2 data-t="Vergleich">Vergleich</h2><span class="row"><button onclick="downloadCompare()" data-t="HTML-Bericht herunterladen">HTML-Bericht herunterladen</button><button onclick="$('compareCard').classList.add('hidden')" data-t="Schließen">Schließen</button></span></div><div id="compare"></div></section>
 </div>
 </main>
 <script>
@@ -94,6 +121,8 @@ const en = {
   'Prüfen':'Check','Test starten':'Start test','Szenario speichern':'Save scenario','Aktueller Lauf':'Current run','Ergebnisse':'Results','Kein aktiver Lauf':'No active run','Noch keine Läufe':'No runs yet','CSV herunterladen':'Download CSV','Not-Stopp':'Emergency stop',
   'Bereit zum Start':'Ready to start','Nicht startbar':'Cannot start','Stufen':'Steps','Gestartet':'Started','Gespeichert':'Saved','Fehler':'Error','Phase':'Phase','Stufe':'Step','angemeldet':'checked in','stabil bis':'stable up to','Nutzer/Sitzung':'users/meeting',
   'Alle Stufen bestanden':'All steps passed','Grenze gefunden':'Limit found','Ungültig: Bots überlastet':'Invalid: bots overloaded','Abgebrochen':'Aborted','bestanden':'passed','Grenze':'limit','ungültig':'invalid',
+  'Selbsttest':'Self-test','Vor dem Start Selbsttest mit 2 Bots ausführen':'Run a self-test with 2 bots before starting','Vorlage löschen':'Delete template','Vorlage wirklich löschen?':'Really delete this template?','Gelöscht':'Deleted','Testserie':'Test series','Führt mehrere gespeicherte Szenarien nacheinander aus.':'Runs several saved scenarios one after the other.','Name der Serie':'Series name','Pause zwischen den Läufen (s)':'Pause between runs (s)','Szenario hinzufügen':'Add scenario','Bitte wählen':'Please choose','Nach einem Fehler weitermachen':'Continue after an error','Serie starten':'Start series','Serie':'Series','Status':'Status','Läufe':'Runs','Serie stoppen':'Stop series','läuft':'running','Pause':'pause','beendet':'finished','abgebrochen':'aborted','Läufe vergleichen':'Compare runs','Nach oben':'Move up','Nach unten':'Move down',
+  'Auswahl vergleichen':'Compare selection','Vergleich':'Comparison','Schließen':'Close','2 bis 8 Läufe auswählen':'Select 2 to 8 runs','Lauf auswählen':'Select run','HTML-Bericht herunterladen':'Download HTML report','In Grafana öffnen':'Open in Grafana','Protokoll':'Log','Messwerte pro Stufe':'Measurements per step','Lädt':'Loading',
   'Ergebnis':'Result','Join-Fehler %':'Join failures %','Join P95 s':'Join P95 s','Audio-Verlust %':'Audio loss %','Video-Verlust %':'Video loss %','Jitter ms':'Jitter ms','RTT ms':'RTT ms','Freezes/min je Stream':'Freezes/min per stream','Bot-CPU %':'Bot CPU %','BBB: Teiln./Video':'BBB: part./video','Medienweg':'Media path','Grund':'Reason',
 };
 let lang = store.get('lang') || ((navigator.language || 'en').toLowerCase().startsWith('de') ? 'de' : 'en');
@@ -105,13 +134,38 @@ function applyLang() {
   document.querySelectorAll('[data-t-placeholder]').forEach((e) => { e.placeholder = T(e.dataset.tPlaceholder); });
 }
 function presetName(s) { return lang === 'en' ? (s.nameEn ?? s.name) : s.name; }
-function renderPresets() { const i = $('preset').value; $('preset').innerHTML = presets.map((p, n) => `<option value="${n}">${esc(presetName(p.scenario))}</option>`).join(''); if (i) $('preset').value = i; }
-function setLang(next) { lang = next; store.set('lang', lang); applyLang(); renderPresets(); refresh(); }
+function renderPresets() {
+  const i = $('preset').value;
+  $('preset').innerHTML = presets.map((p, n) => `<option value="${n}">${esc(presetName(p.scenario))}</option>`).join('');
+  if (i && presets[i]) $('preset').value = i;
+  $('seriesAdd').innerHTML = `<option value="">${esc(T('Bitte wählen'))}</option>` + presets.map((p, n) => `<option value="${n}">${esc(presetName(p.scenario))}</option>`).join('');
+  $('deleteScenario').disabled = !presets[$('preset').value] || presets[$('preset').value].builtin;
+}
+async function reloadPresets(name) {
+  presets = await api('/api/scenarios');
+  const index = presets.findIndex((p) => p.scenario.name === name);
+  if (index >= 0) { renderPresets(); $('preset').value = index; }
+  renderPresets();
+}
+function setLang(next) { lang = next; store.set('lang', lang); applyLang(); renderPresets(); renderSeriesList(); lastRuns = ''; refresh(); if (!$('compareCard').classList.contains('hidden')) compareSelected(); }
 let presets = [];
 let loadedFile = null;
+const selected = new Set(), openRuns = new Set();
+let lastRuns = '', lastSeries = '';
 const sloKeys = ['maxJoinFailurePct','maxJoinP95Seconds','maxAudioLossPct','maxVideoLossPct','maxJitterMs','maxRttMs','maxFreezesPerMinute','maxBotCpuPct'];
 const esc = (v) => String(v ?? '').replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
+const headers_ = () => ({ authorization: 'Bearer ' + token });
+async function fetchText(path) {
+  const res = await fetch(path, { headers: headers_() });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return res.text();
+}
+async function download(path, name) {
+  const res = await fetch(path, { headers: headers_() });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(await res.blob()); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
 async function api(path, options = {}) {
   const res = await fetch(path, { ...options, headers: { authorization: 'Bearer ' + token, ...(options.body ? { 'content-type': 'application/json' } : {}) } });
   if (res.status === 401) { showLogin(); throw new Error(T('Anmeldung')); }
@@ -153,7 +207,7 @@ function fill(s) {
   $('presentationFile').value = ''; loadedFile = s.meeting.presentationFile ?? null;
   $('roles').replaceChildren(); s.roles.forEach(addRole); toggleMode();
 }
-function applyPreset() { const p = presets[$('preset').value]; if (p) fill(p.scenario); }
+function applyPreset() { const p = presets[$('preset').value]; if (p) fill(p.scenario); $('deleteScenario').disabled = !p || p.builtin; }
 async function presentationFile() {
   const file = $('presentationFile').files[0];
   if (!file) return loadedFile;
@@ -188,13 +242,47 @@ const preflight = () => act(async () => {
     `Bots: ${r.need.bots}, CPU: ${r.need.cpu} vCPU, RAM: ${r.need.memoryGiB.toFixed(1)} GiB`,
     `${T('Stufen')}: ${r.steps.join(' → ')} ${T('Nutzer/Sitzung')}`, ...r.notes].join('\n');
 });
-const startRun = () => act(async () => { const r = await api('/api/runs', { method: 'POST', body: JSON.stringify(await collect()) }); refresh(); return T('Gestartet') + ': ' + r.id; });
-const saveScenario = () => act(async () => { await api('/api/scenarios', { method: 'PUT', body: JSON.stringify(await collect()) }); return T('Gespeichert'); });
-async function stopRun(id) { await api(`/api/runs/${id}/stop`, { method: 'POST' }); refresh(); }
-async function downloadCsv(id) {
-  const res = await fetch(`/api/runs/${id}/report.csv`, { headers: { authorization: 'Bearer ' + token } });
-  const a = document.createElement('a'); a.href = URL.createObjectURL(await res.blob()); a.download = id + '.csv'; a.click();
+const startRun = () => act(async () => { const r = await api(`/api/runs${$('runSelfTest').checked ? '?selfTest=true' : ''}`, { method: 'POST', body: JSON.stringify(await collect()) }); refresh(); return T('Gestartet') + ': ' + (r.id ?? r.seriesId); });
+const selfTest = () => act(async () => { const r = await api('/api/selftest', { method: 'POST', body: JSON.stringify({ target: $('target').value }) }); refresh(); return T('Selbsttest') + ': ' + r.id; });
+const saveScenario = () => act(async () => { await api('/api/scenarios', { method: 'PUT', body: JSON.stringify(await collect()) }); await reloadPresets($('name').value); return T('Gespeichert'); });
+const deleteScenario = () => act(async () => {
+  const p = presets[$('preset').value];
+  if (!p || p.builtin || !confirm(T('Vorlage wirklich löschen?'))) return '';
+  await api(`/api/scenarios/${encodeURIComponent(p.scenario.name)}`, { method: 'DELETE' });
+  $('preset').value = ''; await reloadPresets(); applyPreset(); return T('Gelöscht');
+});
+let seriesItems = [];
+function renderSeriesList() {
+  $('seriesList').replaceChildren(...seriesItems.map((name, i) => {
+    const li = document.createElement('li'); li.append(name);
+    const button = (label, aria, action, disabled) => { const b = document.createElement('button'); b.textContent = label; b.setAttribute('aria-label', T(aria)); b.disabled = disabled; b.onclick = action; return b; };
+    const swap = (a, b) => { [seriesItems[a], seriesItems[b]] = [seriesItems[b], seriesItems[a]]; renderSeriesList(); };
+    li.append(button('↑', 'Nach oben', () => swap(i, i - 1), i === 0), button('↓', 'Nach unten', () => swap(i, i + 1), i === seriesItems.length - 1), button('✕', 'Entfernen', () => { seriesItems.splice(i, 1); renderSeriesList(); }, false));
+    return li;
+  }));
 }
+function addToSeries() { const p = presets[$('seriesAdd').value]; if (p) { seriesItems.push(p.scenario.name); renderSeriesList(); } $('seriesAdd').value = ''; }
+async function startSeries() {
+  try {
+    const r = await api('/api/series', { method: 'POST', body: JSON.stringify({ name: $('seriesName').value || T('Testserie'), scenarios: seriesItems, pauseSeconds: +$('seriesPause').value, continueOnError: $('seriesContinue').checked, selfTest: $('seriesSelfTest').checked }) });
+    $('seriesResult').textContent = T('Gestartet') + ': ' + r.id; refresh();
+  } catch (e) { $('seriesResult').textContent = T('Fehler') + ': ' + e.message; }
+}
+async function stopSeries(id) { await api(`/api/series/${id}/stop`, { method: 'POST' }); refresh(); }
+function compareRuns(ids) { selected.clear(); ids.forEach((id) => selected.add(id)); lastRuns = ''; refresh().then(compareSelected); }
+const compareIds = () => [...selected].join(',');
+async function compareSelected() {
+  $('compare').innerHTML = await fetchText(`/api/compare/view?ids=${compareIds()}&lang=${lang}`);
+  $('compareCard').classList.remove('hidden'); initCharts($('compare')); $('compareCard').scrollIntoView({ behavior: 'smooth' });
+}
+const downloadCompare = () => download(`/api/compare/report.html?ids=${compareIds()}&lang=${lang}`, 'comparison.html');
+function updateCompareButton() {
+  $('compareButton').disabled = selected.size < 2 || selected.size > 8;
+  $('compareHint').textContent = T('2 bis 8 Läufe auswählen') + ` (${selected.size})`;
+}
+async function stopRun(id) { await api(`/api/runs/${id}/stop`, { method: 'POST' }); refresh(); }
+const downloadCsv = (id) => download(`/api/runs/${id}/report.csv`, id + '.csv');
+const downloadHtml = (id) => download(`/api/runs/${id}/report.html?lang=${lang}`, id + '.html');
 const outcomes = { completed: 'Alle Stufen bestanden', 'limit-found': 'Grenze gefunden', invalid: 'Ungültig: Bots überlastet', aborted: 'Abgebrochen', error: 'Fehler' };
 const verdicts = { pass: 'bestanden', fail: 'Grenze', invalid: 'ungültig' };
 const headers = ['Nutzer/Sitzung','Ergebnis','Join-Fehler %','Join P95 s','Audio-Verlust %','Video-Verlust %','Jitter ms','RTT ms','Freezes/min je Stream','Bot-CPU %','BBB: Teiln./Video','Medienweg','Grund'];
@@ -205,16 +293,48 @@ function stepsTable(run) {
 }
 async function refresh() {
   const runs = await api('/api/runs').catch(() => null); if (!runs) return;
+  const seriesAll = await api('/api/series').catch(() => []);
   const running = runs.find((r) => r.phase !== 'finished');
   if (running) {
     const l = running.live || {};
     $('live').className = '';
-    $('live').innerHTML = `<div class="row"><strong>${esc(running.scenario.name)}</strong><button class="danger" onclick="stopRun('${esc(running.id)}')">${esc(T('Not-Stopp'))}</button></div>
+    $('live').innerHTML = `<div class="row"><strong>${esc(running.kind === 'selftest' ? T('Selbsttest') : running.scenario.name)}</strong><button class="danger" onclick="stopRun('${esc(running.id)}')">${esc(T('Not-Stopp'))}</button></div>
       <p>${esc(T('Phase'))}: ${esc(running.phase)}${l.stepPhase ? ' · ' + esc(l.stepPhase) : ''}${l.usersPerMeeting ? ` · ${l.usersPerMeeting} ${esc(T('Nutzer/Sitzung'))}` : ''}${l.stepCount ? ` · ${esc(T('Stufe'))} ${(l.currentStep ?? -1) + 1}/${l.stepCount}` : ''}</p>
       <p>Bots: ${l.registered ?? 0}/${l.expected ?? '?'} ${esc(T('angemeldet'))} · ${esc(Object.entries(l.byState || {}).map(([k,v]) => k + ': ' + v).join(', '))}</p><div class="scroll">${stepsTable(running)}</div>`;
+    const detail = await api(`/api/runs/${running.id}`).catch(() => null);
+    if (detail?.log?.length) { const pre = document.createElement('pre'); pre.className = 'log'; pre.textContent = logText(detail.log.slice(-8)); $('live').append(pre); }
   } else { $('live').className = 'muted'; $('live').textContent = T('Kein aktiver Lauf'); }
-  $('runs').innerHTML = runs.filter((r) => r.phase === 'finished').map((r) => `<details><summary>${esc(new Date(r.createdAt).toLocaleString(lang === 'en' ? 'en-GB' : 'de-DE'))} · ${esc(r.scenario.name)} · ${esc(T(outcomes[r.outcome] ?? r.outcome))}${r.capacityUsers ? ` · ${esc(T('stabil bis'))} ${r.capacityUsers} ${esc(T('Nutzer/Sitzung'))}` : ''}</summary>
-    ${r.message ? `<p>${esc(r.message)}</p>` : ''}<div class="scroll">${stepsTable(r)}</div><button style="margin-top:8px" onclick="downloadCsv('${esc(r.id)}')">${esc(T('CSV herunterladen'))}</button></details>`).join('') || `<p class="muted">${esc(T('Noch keine Läufe'))}</p>`;
+  renderSeriesRuns(seriesAll);
+  const finished = runs.filter((r) => r.phase === 'finished');
+  // Rebuilding on every poll would close open runs and clear the selection.
+  const signature = lang + finished.map((r) => r.id).join();
+  if (signature !== lastRuns) {
+    lastRuns = signature;
+    $('runs').innerHTML = finished.map((r) => `<div class="runrow"><input type="checkbox" aria-label="${esc(T('Lauf auswählen'))}" ${selected.has(r.id) ? 'checked' : ''} onchange="toggleRun('${esc(r.id)}', this.checked)"><details data-id="${esc(r.id)}" ${openRuns.has(r.id) ? 'open' : ''} ontoggle="runToggled(this)"><summary>${esc(new Date(r.createdAt).toLocaleString(lang === 'en' ? 'en-GB' : 'de-DE'))} · ${esc(r.kind === 'selftest' ? T('Selbsttest') : r.scenario.name)} · ${esc(r.kind === 'selftest' ? T(r.selfTest?.ok ? 'bestanden' : 'Fehler') : T(outcomes[r.outcome] ?? r.outcome))}${r.capacityUsers && r.kind !== 'selftest' ? ` · ${esc(T('stabil bis'))} ${r.capacityUsers} ${esc(T('Nutzer/Sitzung'))}` : ''}</summary><div class="runbody"></div></details></div>`).join('') || `<p class="muted">${esc(T('Noch keine Läufe'))}</p>`;
+  }
+  updateCompareButton();
+}
+function renderSeriesRuns(all) {
+  const states = { running: 'läuft', finished: 'beendet', aborted: 'abgebrochen', error: 'Fehler' };
+  const signature = lang + JSON.stringify(all);
+  if (signature === lastSeries) return;
+  lastSeries = signature;
+  $('seriesRuns').innerHTML = all.length ? `<table><thead><tr>${['Serie','Status','Läufe','Grund',''].map((h) => `<th>${esc(T(h))}</th>`).join('')}</tr></thead><tbody>` + all.map((s) => `<tr><td>${esc(s.name)}</td><td>${esc(T(states[s.state]))}${s.pausing ? ' · ' + esc(T('Pause')) : ''}</td><td>${s.state === 'running' ? s.position + 1 : s.runIds.length}/${s.scenarios.length}</td><td>${esc(s.message ?? '')}</td><td>${s.state === 'running' ? `<button class="danger" onclick="stopSeries('${esc(s.id)}')">${esc(T('Serie stoppen'))}</button>` : `<button ${s.runIds.length < 2 || s.runIds.length > 8 ? 'disabled' : ''} onclick='compareRuns(${esc(JSON.stringify(s.runIds))})'>${esc(T('Läufe vergleichen'))}</button>`}</td></tr>`).join('') + '</tbody></table>' : '';
+}
+const logText = (log) => log.map((l) => `${l.at.slice(11, 19)}  ${l.text}`).join('\n');
+function toggleRun(id, on) { if (on) selected.add(id); else selected.delete(id); updateCompareButton(); }
+async function runToggled(details) {
+  const id = details.dataset.id;
+  if (!details.open) { openRuns.delete(id); return; }
+  openRuns.add(id);
+  const box = details.querySelector('.runbody');
+  if (box.childElementCount) return;
+  box.textContent = T('Lädt');
+  const [run, view] = await Promise.all([api(`/api/runs/${id}`), fetchText(`/api/runs/${id}/view?lang=${lang}`)]);
+  box.innerHTML = `${run.message ? `<p>${esc(run.message)}</p>` : ''}${view}<h3>${esc(T('Messwerte pro Stufe'))}</h3><div class="scroll">${stepsTable(run)}</div><h3>${esc(T('Protokoll'))}</h3><pre class="log"></pre>
+    <div class="row" style="margin-top:10px"><button onclick="downloadHtml('${esc(id)}')">${esc(T('HTML-Bericht herunterladen'))}</button><button onclick="downloadCsv('${esc(id)}')">${esc(T('CSV herunterladen'))}</button>${run.grafanaUrl ? `<a class="button" target="_blank" rel="noopener" href="${esc(run.grafanaUrl)}">${esc(T('In Grafana öffnen'))}</a>` : ''}</div>`;
+  box.querySelector('.log').textContent = logText(run.log);
+  initCharts(box);
 }
 async function init() {
   let meta; try { meta = await api('/api/meta'); } catch { showLogin(); return; }

@@ -5,13 +5,16 @@ import { fileURLToPath } from 'node:url';
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { buildSlots, resourceNeed, usersPerStep, validatePlan } from '../shared/plan.js';
-import { setLanguage, t } from '../shared/i18n.js';
+import { setLanguage, t, type Language } from '../shared/i18n.js';
 import type { Heartbeat } from '../shared/protocol.js';
 import { scenarioSchema, type Scenario } from '../shared/scenario.js';
 import { ExternalBackend, KubernetesBackend, type BotBackend } from './backend.js';
 import { loadConfig } from './config.js';
 import { renderCsv, renderMetrics } from './report.js';
-import { Run, type RunRecord } from './runner.js';
+import { grafanaLink, renderCompareReport, renderCompareView, renderRunReport, renderRunView } from './reportHtml.js';
+import { Run, type RunOutcome, type RunRecord } from './runner.js';
+import { evaluateSelfTest, selfTestScenario } from './selftest.js';
+import { Series, seriesRequestSchema, type RunStarter, type SeriesRequest } from './series.js';
 import { Store } from './store.js';
 
 const config = loadConfig();
@@ -29,8 +32,16 @@ for (const run of await store.listRuns()) {
   }
 }
 
+for (const series of await store.listSeries()) {
+  if (series.state === 'running') {
+    await store.saveSeries({ ...series, state: 'error', pausing: false, message: t('run.restarted') });
+  }
+}
+
 const app = Fastify({ logger: { level: 'warn' }, bodyLimit: 64 * 1024 * 1024 });
 const active = new Map<string, Run>();
+const activeSeries = new Map<string, Series>();
+const MAX_COMPARED_RUNS = 8;
 const uiDir = join(dirname(fileURLToPath(import.meta.url)), 'public');
 
 function sameToken(given: string | undefined, expected: string): boolean {
@@ -60,8 +71,83 @@ function parseScenario(body: unknown, reply: FastifyReply): Scenario | undefined
   return undefined;
 }
 
+class HttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+/** Starts a run in the background. Used by single runs and by test series. */
+async function launchRun(
+  scenario: Scenario,
+  seriesId?: string,
+  selfTest = false,
+): Promise<{ run: Run; done: Promise<RunOutcome> }> {
+  const problems = preflightProblems(scenario);
+  if (problems.length) throw new HttpError(400, problems.join('; '));
+  const capacity = await backend.capacity(scenario);
+  if (!capacity.ok) throw new HttpError(409, t('api.noCapacity', { notes: capacity.notes.join('; ') }));
+  // Two runs on one server would measure each other.
+  const busy = [...active.values()].some((r) => !r.finished && r.record.scenario.target === scenario.target);
+  if (busy) throw new HttpError(409, t('api.targetBusy'));
+
+  const target = config.targets[scenario.target]!;
+  const run = new Run(scenario, target, backend, (r) => store.saveRun(r), {
+    botStartTimeoutSeconds: config.botStartTimeoutSeconds,
+    ...(config.prometheusUrl ? { prometheusUrl: config.prometheusUrl } : {}),
+    ...(seriesId ? { seriesId } : {}),
+    ...(selfTest ? { selfTest: (record: RunRecord) => evaluateSelfTest(record, Boolean(target.webrtcIpPolicy)) } : {}),
+  });
+  active.set(run.id, run);
+  const done = run.execute().then(() => {
+    setTimeout(() => active.delete(run.id), 30_000);
+    return run.record.outcome ?? 'error';
+  });
+  return { run, done };
+}
+
+const starter: RunStarter = {
+  async start(scenario, seriesId) {
+    const { run, done } = await launchRun(scenario, seriesId);
+    return { id: run.id, done, stop: () => run.stop() };
+  },
+  async selfTest(target, seriesId) {
+    const { run, done } = await launchRun(selfTestScenario(target), seriesId, true);
+    return { id: run.id, done: done.then(() => run.record.selfTest?.ok ?? false), stop: () => run.stop() };
+  },
+};
+
+async function launchSeries(request: SeriesRequest, scenarios: Scenario[]): Promise<Series> {
+  if (activeSeries.size > 0) throw new HttpError(409, t('series.running'));
+  // Better to fail before the first run than after hours in the third one.
+  const problems = scenarios.flatMap((s) => preflightProblems(s).map((problem) => t('series.scenarioProblem', { name: s.name, problem })));
+  if (problems.length) throw new HttpError(400, problems.join('; '));
+  const series = new Series(request, scenarios, starter, (s) => store.saveSeries(s));
+  activeSeries.set(series.id, series);
+  await store.saveSeries(series.record);
+  void series.execute().finally(() => activeSeries.delete(series.id));
+  return series;
+}
+
+const languageOf = (req: FastifyRequest): Language =>
+  (req.query as { lang?: string }).lang === 'de' ? 'de' : (req.query as { lang?: string }).lang === 'en' ? 'en' : config.language;
+
+/** Excel and Grafana tolerate only safe names. */
+const fileName = (name: string) => name.replace(/[^a-zA-Z0-9._-]+/g, '-').slice(0, 80);
+
+app.setErrorHandler((err, _req, reply) => {
+  if (err instanceof HttpError) return reply.code(err.status).send({ error: err.message });
+  console.error(err);
+  return reply.code(500).send({ error: String(err) });
+});
+
 app.get('/healthz', async () => ({ ok: true }));
 app.get('/', async (_req, reply) => reply.type('text/html').send(await readFile(join(uiDir, 'index.html'))));
+app.get('/charts.js', async (_req, reply) => reply.type('text/javascript').send(await readFile(join(uiDir, 'charts.js'))));
+app.get('/charts.css', async (_req, reply) => reply.type('text/css').send(await readFile(join(uiDir, 'charts.css'))));
 app.get('/metrics', async (_req, reply) => reply.type('text/plain; version=0.0.4').send(renderMetrics([...active.values()])));
 
 app.post<{ Params: { id: string }; Body: Heartbeat }>('/internal/runs/:id/heartbeat', async (req, reply) => {
@@ -121,28 +207,24 @@ app.register(async (admin) => {
   admin.post('/api/runs', async (req, reply) => {
     const scenario = parseScenario(req.body, reply);
     if (!scenario) return reply;
-    const problems = preflightProblems(scenario);
-    if (problems.length) return reply.code(400).send({ error: problems.join('; ') });
-    const capacity = await backend.capacity(scenario);
-    if (!capacity.ok) return reply.code(409).send({ error: t('api.noCapacity', { notes: capacity.notes.join('; ') }) });
-    // Two runs on one server would measure each other.
-    const busy = [...active.values()].some((r) => r.record.scenario.target === scenario.target);
-    if (busy) return reply.code(409).send({ error: t('api.targetBusy') });
-
-    const target = config.targets[scenario.target]!;
-    const run = new Run(scenario, target, backend, (r) => store.saveRun(r), {
-      botStartTimeoutSeconds: config.botStartTimeoutSeconds,
-      ...(config.prometheusUrl ? { prometheusUrl: config.prometheusUrl } : {}),
-    });
-    active.set(run.id, run);
-    void run.execute().finally(() => setTimeout(() => active.delete(run.id), 30_000));
+    // With a self-test first, the run becomes a series of one, which handles the gate and the stop.
+    if ((req.query as { selfTest?: string }).selfTest === 'true') {
+      const request = seriesRequestSchema.parse({ name: scenario.name, scenarios: [scenario.name], pauseSeconds: 0, selfTest: true });
+      const series = await launchSeries(request, [scenario]);
+      return reply.code(201).send({ seriesId: series.id });
+    }
+    const { run } = await launchRun(scenario);
     // Only external bots need it: Kubernetes jobs receive the token from the backend.
     return reply.code(201).send({ id: run.id, ...(config.backend.type === 'external' ? { botToken: run.token } : {}) });
   });
 
   admin.get('/api/runs', async () => {
     const runs = await store.listRuns();
-    return runs.map(({ log: _log, ...run }) => ({ ...run, live: active.get(run.id)?.status() }));
+    return runs.map(({ log: _log, ...run }) => ({
+      ...run,
+      live: active.get(run.id)?.status(),
+      grafanaUrl: grafanaLink(config.grafanaUrl, run as RunRecord) ?? null,
+    }));
   });
 
   const findRun = async (id: string): Promise<RunRecord | undefined> =>
@@ -151,7 +233,80 @@ app.register(async (admin) => {
   admin.get<{ Params: { id: string } }>('/api/runs/:id', async (req, reply) => {
     const run = await findRun(req.params.id);
     if (!run) return reply.code(404).send({ error: t('api.runNotFound') });
-    return { ...run, live: active.get(run.id)?.status() };
+    const live = active.get(run.id);
+    return {
+      ...run,
+      live: live?.status(),
+      // Bots of a series start between runs, so external ones must be able to fetch the token.
+      ...(live && config.backend.type === 'external' ? { botToken: live.token } : {}),
+      grafanaUrl: grafanaLink(config.grafanaUrl, run) ?? null,
+    };
+  });
+
+  admin.get<{ Params: { id: string } }>('/api/runs/:id/view', async (req, reply) => {
+    const run = await findRun(req.params.id);
+    if (!run) return reply.code(404).send({ error: t('api.runNotFound') });
+    return reply.type('text/html').send(renderRunView(run, languageOf(req)));
+  });
+
+  admin.get<{ Params: { id: string } }>('/api/runs/:id/report.html', async (req, reply) => {
+    const run = await findRun(req.params.id);
+    if (!run) return reply.code(404).send({ error: t('api.runNotFound') });
+    return reply
+      .type('text/html')
+      .header('content-disposition', `attachment; filename="${fileName(run.id)}.html"`)
+      .send(renderRunReport(run, languageOf(req), config.grafanaUrl));
+  });
+
+  const comparedRuns = async (req: FastifyRequest): Promise<RunRecord[]> => {
+    const ids = ((req.query as { ids?: string }).ids ?? '').split(',').filter(Boolean);
+    if (ids.length < 2) throw new HttpError(400, t('series.tooFewRuns'));
+    if (ids.length > MAX_COMPARED_RUNS) throw new HttpError(400, t('series.tooManyRuns', { max: MAX_COMPARED_RUNS }));
+    const runs = await store.listRuns();
+    const found = ids.map((id) => runs.find((r) => r.id === id));
+    if (found.some((r) => !r)) throw new HttpError(404, t('api.runNotFound'));
+    return (found as RunRecord[]).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  };
+
+  admin.get('/api/compare/view', async (req, reply) =>
+    reply.type('text/html').send(renderCompareView(await comparedRuns(req), languageOf(req))),
+  );
+
+  admin.get('/api/compare/report.html', async (req, reply) =>
+    reply
+      .type('text/html')
+      .header('content-disposition', 'attachment; filename="comparison.html"')
+      .send(renderCompareReport(await comparedRuns(req), languageOf(req))),
+  );
+
+  admin.post('/api/selftest', async (req, reply) => {
+    const target = (req.body as { target?: string } | undefined)?.target ?? '';
+    if (!config.targets[target]) throw new HttpError(400, t('api.unknownTarget', { target }));
+    const { run } = await launchRun(selfTestScenario(target), undefined, true);
+    return reply.code(201).send({ id: run.id, ...(config.backend.type === 'external' ? { botToken: run.token } : {}) });
+  });
+
+  admin.get('/api/series', async () => store.listSeries());
+
+  admin.post('/api/series', async (req, reply) => {
+    const parsed = seriesRequestSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: z.prettifyError(parsed.error) });
+    const request = parsed.data;
+    const known = await store.listScenarios();
+    const scenarios = request.scenarios.map((name) => {
+      const entry = known.find((k) => k.scenario.name === name);
+      if (!entry) throw new HttpError(400, t('series.unknownScenario', { name }));
+      return entry.scenario;
+    });
+    const series = await launchSeries(request, scenarios);
+    return reply.code(201).send({ id: series.id });
+  });
+
+  admin.post<{ Params: { id: string } }>('/api/series/:id/stop', async (req, reply) => {
+    const series = activeSeries.get(req.params.id);
+    if (!series) return reply.code(404).send({ error: t('series.notFound') });
+    series.stop();
+    return { ok: true };
   });
 
   admin.get<{ Params: { id: string } }>('/api/runs/:id/report.csv', async (req, reply) => {

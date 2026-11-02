@@ -76,6 +76,116 @@ slo:
       max: 85
 ```
 
+## Berichte und Ergebnisse
+
+### Steuerungstool
+
+![Szenario-Formular der Weboberfläche](docs/screenshots/de-scenario.png)
+
+### Ein einzelner Lauf
+
+Jeder beendete Lauf zeigt die stabile Nutzerzahl, Diagramme über die Laststufen, die Tabelle aller Messwerte, das
+Protokoll und seine Downloads. Jedes Diagramm zeigt eine Kennzahl über die Nutzer pro Sitzung. Eine gestrichelte Linie
+markiert den Grenzwert, ein Ring markiert eine Stufe, die eine Grenze verletzt hat. Mit dem Mauszeiger oder den
+Pfeiltasten lassen sich die Werte ablesen.
+
+![Ergebnis eines Laufs mit Diagrammen und Protokoll](docs/screenshots/de-run.png)
+
+- **HTML-Bericht:** Eine eigenständige Datei mit allen Daten, Diagrammen und dem Protokoll. Sie funktioniert offline,
+  lässt sich drucken und an Tickets oder Mails anhängen.
+- **CSV:** Die Stufenwerte für Excel oder LibreOffice.
+- **Prometheus-Regeln:** Jede Regel aus `slo.prometheus` bekommt ein eigenes Diagramm.
+- **Einzelne Laststufe:** Ein Lauf im Modus `fixed` hat keinen Verlauf, seine Werte stehen daher ohne Diagramme in der
+  Tabelle.
+
+![Heruntergeladener HTML-Bericht](docs/screenshots/de-report.png)
+
+### Läufe vergleichen
+
+2 bis 8 Läufe auswählen und *Auswahl vergleichen* wählen. Alle Läufe teilen sich ein Diagramm pro Kennzahl, jeder mit
+eigener Farbe und Markerform. Ein Grenzwert erscheint nur, wenn er für alle verglichenen Läufe gleich ist. Den Vergleich
+gibt es auch als HTML-Bericht.
+
+![Vergleich von zwei Läufen](docs/screenshots/de-compare.png)
+
+### Testserien
+
+Eine Serie führt gespeicherte Szenarien nacheinander mit einer Pause dazwischen aus. Vor dem ersten Lauf werden alle
+Szenarien geprüft, damit ein fehlerhaftes nicht erst nach Stunden scheitert. Standardmäßig endet eine Serie, wenn ein Lauf
+mit einem Fehler endet. *Grenze gefunden* und *ungültig* halten sie nicht an. Danach öffnet *Läufe vergleichen* den
+Vergleich.
+
+![Formular für Testserien](docs/screenshots/de-series.png)
+
+Mit `backend.type: external` müssen Bots für jeden Lauf einer Serie gestartet werden, das ist für Tests gedacht. Auf
+Kubernetes erledigt das der Controller selbst.
+
+Die Screenshots zeigen erfundene Beispieldaten aus [dev/screenshots/](dev/screenshots/), keine Messungen.
+
+### Prometheus und Grafana
+
+`/metrics` liefert gleitende Werte der letzten Minute pro Lauf, mit den Labels `run`, `scenario` und `target`. Die Werte
+gibt es, solange ein Lauf aktiv ist, und 30 Sekunden danach.
+
+| Metrik | Bedeutung |
+|---|---|
+| `bbb_stress_users_per_meeting` | Aktuelle Laststufe |
+| `bbb_stress_stable_users` | Höchste bestandene Stufe |
+| `bbb_stress_bots{state}` | Bots nach Zustand |
+| `bbb_stress_audio_loss_percent`, `bbb_stress_video_loss_percent` | Paketverlust |
+| `bbb_stress_jitter_p95_milliseconds`, `bbb_stress_rtt_p95_milliseconds` | Jitter und Laufzeit |
+| `bbb_stress_freezes_per_minute` | Video-Freezes pro Stream und Minute |
+| `bbb_stress_join_p95_seconds`, `bbb_stress_join_failure_percent` | Beitritte |
+| `bbb_stress_bot_cpu_p95_percent`, `bbb_stress_bot_throttled_p95_percent` | Last der Generatoren |
+
+Das Chart enthält ein [Grafana-Dashboard](deploy/helm/bbb-stress-tool/dashboards/bbb-stress.json) mit diesen Werten sowie
+CPU und Netz des BBB-Servers aus dem Node Exporter auf einer Zeitachse. So wird es installiert:
+
+```sh
+helm upgrade --install bbb-stress deploy/helm/bbb-stress-tool -n NAMESPACE --reuse-values \
+  --set serviceMonitor.enabled=true \
+  --set grafanaDashboard.enabled=true --set grafanaDashboard.namespace=cattle-dashboards
+```
+
+Der Grafana-Sidecar übernimmt ConfigMaps mit dem Label `grafana_dashboard: "1"`. Alternativ lässt sich die JSON-Datei von
+Hand importieren. Mit `grafanaUrl: https://grafana.example.org/d/bbb-stress` in der Konfiguration bekommt jeder Lauf einen
+Link *In Grafana öffnen* mit passendem Zeitraum und Lauf.
+
+## Selbsttest und Selektor-Check
+
+### Selbsttest
+
+Bevor viele Pods starten, prüfen zwei Bots den gesamten Weg zum Ziel. Der Selbsttest dauert etwa eine Minute und läuft
+über *Selbsttest* in der Oberfläche. Start und Testserie führen ihn standardmäßig zuerst aus. Schlägt er fehl, beginnt
+kein Lasttest.
+
+| Prüfung | Was sie belegt |
+|---|---|
+| Bots gestartet, Meeting angelegt | Pods laufen, API-URL, Secret und Proxy stimmen |
+| Beitritt über den BBB-Client | Der Client lädt, die Stufe im Fehler nennt die Stelle |
+| Oberflächen-Elemente gefunden | Die Selektoren der Bots passen zu diesem Server |
+| Audio und Video empfangen | Medien fließen wirklich in beide Richtungen |
+| BBB meldet Teilnehmer/Kameras | Der Server sieht die Bots wie erwartet |
+| Medienweg | Mit gesetztem `webrtcIpPolicy` zählt nur `relay` als bestanden |
+| Bot-CPU | Die Bots haben genug Ressourcen |
+
+![Ergebnis eines Selbsttests](docs/screenshots/de-selftest.png)
+
+### Selektor-Check
+
+BBB ändert seinen Client zwischen den Versionen. `scripts/check-selectors.mjs` vergleicht die Selektoren und
+Join-Parameter der Bots mit den offiziellen Playwright-Tests von BBB, ganz ohne Server:
+
+```sh
+node scripts/check-selectors.mjs                 # neueste stabile Version jeder Linie ab 3.0
+node scripts/check-selectors.mjs v3.0.40 v4.0.1  # bestimmte Versionen
+```
+
+Fehlt etwas, endet es mit einem Fehler. Damit es jeden Montag und bei geänderten Selektoren läuft, muss
+[dev/github-workflows/selector-check.yml](dev/github-workflows/selector-check.yml) nach `.github/workflows/` kopiert
+werden. Der Push dafür braucht einen Token mit der Berechtigung *Workflows*. Die Selektoren stehen in
+[src/bot/selectors.ts](src/bot/selectors.ts).
+
 ## Netzwerk ohne UDP
 
 Die Medien laufen über TURN durch den Forward Proxy. Pro Ziel wird das so konfiguriert:
@@ -96,12 +206,12 @@ Geprüft mit dem echten Client in einem Netz, dessen einziger Weg nach außen ei
 | Version | Medienweg | Ports am Proxy | Änderung am Server |
 |---|---|---|---|
 | BBB 4.0.1 (LiveKit) | `relay/tls` | 443 | Keine, das eingebaute TURN genügte |
-| BBB 3.0.40 (mediasoup, FreeSWITCH) | `relay/tcp` | 443 und der TURN-Port | TURN-Server in `turn-stun-servers.xml` eintragen |
+| BBB 3.0.40 (mediasoup, FreeSWITCH) | `relay/tls` | 443 | Keine, das eingebaute TURN genügte |
 
 Voraussetzungen:
 
-1. **BBB liefert TURN über TCP oder TLS aus:** Bei BBB 3 steht es in `turn-stun-servers.xml`. Die
-   Installation mit `-c turn.example.org:SECRET` richtet das für einen externen coturn ein.
+1. **BBB liefert TURN über TLS aus:** Eine normale `bbb-install`-Installation bringt `turns:HOST:443` in beiden
+   Versionen mit. Bei eigenen Setups das prüfen, der Selbsttest zeigt den Medienweg.
 2. **Der Proxy erlaubt CONNECT:** Die Hosts von BBB, Scalelite und TURN sowie deren Ports müssen freigegeben
    sein, auch für Ports außer 443.
 3. **Keine TLS-Inspektion:** Der Proxy darf TURN-Verbindungen nicht aufbrechen. Das wurde nicht getestet und
@@ -125,7 +235,7 @@ UDP-Freigabe aussagekräftiger.
 ## BBB 3 und BBB 4
 
 Die Bot-Selektoren stammen aus den offiziellen Playwright-Tests und wurden gegen echte Server mit v3.0.40 und
-v4.0.1 geprüft. Sie stehen nur in [src/bot/client.ts](src/bot/client.ts). v3 und v4 lassen sich nicht direkt vergleichen, weil v4
+v4.0.1 geprüft. Sie stehen nur in [src/bot/selectors.ts](src/bot/selectors.ts). v3 und v4 lassen sich nicht direkt vergleichen, weil v4
 standardmäßig LiveKit statt mediasoup und FreeSWITCH nutzt. Für einen fairen Vergleich kann ein
 v4-Szenario über `createParams` die alte Medienstrecke wählen:
 
@@ -142,10 +252,10 @@ meeting:
 ### 1. Images bauen
 
 ```sh
-docker build --target controller -t REGISTRY/bbb-stress/controller:0.1.0 .
-docker build --target bot -t REGISTRY/bbb-stress/bot:0.1.0 .
-docker push REGISTRY/bbb-stress/controller:0.1.0
-docker push REGISTRY/bbb-stress/bot:0.1.0
+docker build --target controller -t REGISTRY/bbb-stress/controller:0.3.0 .
+docker build --target bot -t REGISTRY/bbb-stress/bot:0.3.0 .
+docker push REGISTRY/bbb-stress/controller:0.3.0
+docker push REGISTRY/bbb-stress/bot:0.3.0
 ```
 
 ### 2. Konfiguration als Secret anlegen
@@ -167,7 +277,7 @@ targets:
 backend:
   type: kubernetes
   namespace: NAMESPACE
-  image: REGISTRY/bbb-stress/bot:0.1.0
+  image: REGISTRY/bbb-stress/bot:0.3.0
 ```
 
 ```sh
@@ -182,8 +292,8 @@ Nutzt BBB ein Zertifikat einer internen CA, kommt diese als Secret mit dem Schl�
 ```sh
 helm upgrade --install bbb-stress deploy/helm/bbb-stress-tool -n NAMESPACE \
   --set existingSecret=bbb-stress-config \
-  --set image.controller=REGISTRY/bbb-stress/controller:0.1.0 \
-  --set image.bot=REGISTRY/bbb-stress/bot:0.1.0 \
+  --set image.controller=REGISTRY/bbb-stress/controller:0.3.0 \
+  --set image.bot=REGISTRY/bbb-stress/bot:0.3.0 \
   --set ingress.enabled=true --set ingress.host=bbb-stress.example.org
 ```
 
@@ -218,12 +328,14 @@ erreichbar sein. `POST /api/runs` liefert das Token zurück.
 ## Status
 
 Geprüft gegen echte Server mit BBB 3.0.40 und 4.0.1 mit bis zu 6 Bots, direkt und über einen Forward Proxy
-ohne direkten Netzweg. PDF-Upload und Blättern wurden nur auf 4.0.1 geprüft.
+ohne direkten Netzweg. Auch der Selbsttest lief dort, einschließlich eines Ziels mit falschem Secret. PDF-Upload und Blättern wurden nur auf 4.0.1 geprüft.
 
 Noch nicht geprüft:
 
 - Betrieb auf einem echten Kubernetes-Cluster. Das Chart wurde nur statisch geprüft, die Einschränkungen von
-  `restricted` wurden in Containern nachgestellt.
+  `restricted` wurden in Containern nachgestellt. Das gilt auch für das Grafana-Dashboard, das noch nie in einem echten
+  Grafana geladen wurde.
+- Berichte, Vergleich, Testserien und `/metrics` wurden nur gegen `fake-bbb` getestet, nicht gegen einen echten BBB-Server.
 - Große Läufe, Scalelite, Proxy-Anmeldung und TLS-Inspektion am Proxy.
 - Blättern auf der Standard-PDF von BBB: Im einzigen Lauf blieb die Folie auf Seite 1, auf eigener PDF funktionierte es.
 
@@ -237,6 +349,9 @@ dev/node.sh npm test
 dev/node.sh npm run typecheck
 dev/check-chart.sh                 # Chart nur statisch prüfen
 dev/e2e.sh "$PWD/dev/e2e-config.yaml" dev/e2e-scenario.json 3   # Lauf gegen fake-bbb
+dev/e2e-series.sh "$PWD/dev/e2e-config.yaml" dev/e2e-scenario.json   # Testserie gegen fake-bbb
+dev/screenshots/run.sh             # Weboberfläche prüfen, docs/screenshots schreiben
+node scripts/check-selectors.mjs   # Selektoren mit den BBB-Tests vergleichen
 dev/proxy-spike/run.sh             # WebRTC durch Forward Proxy
 ```
 

@@ -12,3 +12,4 @@ serviceMonitor: { enabled: true }
 bots:
   nodeSelector: { pool: loadtest }
   tolerations: [{ key: loadtest, operator: Exists, effect: NoSchedule }]
+grafanaDashboard: { enabled: true, namespace: cattle-dashboards }

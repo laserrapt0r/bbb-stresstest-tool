@@ -8,12 +8,15 @@ import type { Assignment, BotCommand, BotNetwork, BotSample, BotState, Heartbeat
 import type { Scenario } from '../shared/scenario.js';
 import { joinUserdata } from '../bot/userdata.js';
 import type { BotBackend } from './backend.js';
+import type { SelfTestResult } from './selftest.js';
 import type { Target } from './config.js';
 
 export type RunPhase = 'starting' | 'waiting-for-bots' | 'running' | 'stopping' | 'finished';
 export type RunOutcome = 'completed' | 'limit-found' | 'invalid' | 'aborted' | 'error';
 
 export interface StepRecord extends StepResult {
+  /** Values of the Prometheus rules at the end of the step. */
+  serverMetrics?: { name: string; value: number; max: number }[];
   usersPerMeeting: number;
   totalUsers: number;
   meetingInfo: MeetingInfo[];
@@ -26,6 +29,14 @@ export interface RunRecord {
   createdAt: string;
   finishedAt?: string;
   scenario: Scenario;
+  /** The test series this run belongs to. */
+  seriesId?: string;
+  /** Marks a self-test run, with its result once it finished. */
+  kind?: 'selftest';
+  selfTest?: SelfTestResult;
+  missingSelectors?: string[];
+  /** Summary of what the bots reported as errors. */
+  botErrors?: string;
   phase: RunPhase;
   outcome?: RunOutcome;
   message?: string;
@@ -54,11 +65,14 @@ export interface LiveStatus {
   stepCount: number;
   usersPerMeeting?: number;
   stepPhase?: string;
+  /** Rolling values of the last minute, for the metrics endpoint. */
+  quality?: StepResult;
 }
 
 const MAX_RUN_EXTRA_SECONDS = 1800;
 const BOT_SILENCE_MS = 45_000;
 const JOIN_TIMEOUT_MS = 240_000;
+const LIVE_WINDOW_MS = 60_000;
 
 export class Run {
   readonly token = randomBytes(24).toString('hex');
@@ -67,11 +81,13 @@ export class Run {
   private readonly slots: Slot[];
   private readonly joinQueue: LiveBot[] = [];
   private samples: { botId: string; sample: BotSample }[] = [];
+  private recent: { at: number; botId: string; sample: BotSample }[] = [];
   private collecting = false;
   private abortRequested = false;
   private readonly moderatorPw = randomBytes(8).toString('hex');
   private readonly attendeePw = randomBytes(8).toString('hex');
   private readonly bbb: BbbClient;
+  private readonly fullScenario: Scenario;
   private live: { step?: number; users?: number; phase?: string } = {};
 
   constructor(
@@ -79,17 +95,27 @@ export class Run {
     private readonly target: Target,
     private readonly backend: BotBackend,
     private readonly persist: (r: RunRecord) => Promise<void>,
-    private readonly opts: { botStartTimeoutSeconds: number; prometheusUrl?: string },
+    private readonly opts: {
+      botStartTimeoutSeconds: number;
+      prometheusUrl?: string;
+      seriesId?: string;
+      /** Set for self-tests: bots report missing UI elements and this evaluates the result. */
+      selfTest?: (record: RunRecord) => SelfTestResult;
+    },
   ) {
     const now = new Date();
     this.record = {
       id: `${now.toISOString().slice(0, 19).replace(/[-:T]/g, '').toLowerCase()}-${randomBytes(2).toString('hex')}`,
       createdAt: now.toISOString(),
-      scenario,
+      // The file can be large and the record gets listed often. Its name is enough for reports.
+      scenario: withoutFileContent(scenario),
+      ...(opts.seriesId ? { seriesId: opts.seriesId } : {}),
+      ...(opts.selfTest ? { kind: 'selftest' as const } : {}),
       phase: 'starting',
       steps: [],
       log: [],
     };
+    this.fullScenario = scenario;
     this.slots = buildSlots(scenario);
     this.bbb = new BbbClient({
       apiUrl: target.apiUrl,
@@ -114,9 +140,30 @@ export class Run {
     this.persist(this.record).catch((err) => console.error(t('run.notSaved', { error: String(err) })));
   }
 
+  private liveQuality(): StepResult | undefined {
+    const since = Date.now() - LIVE_WINDOW_MS;
+    this.recent = this.recent.filter((entry) => entry.at >= since);
+    if (this.recent.length === 0) return undefined;
+    const bots = [...this.bots.values()];
+    return evaluateStep(
+      {
+        expectedBots: bots.filter((b) => b.activated).length,
+        failedBots: bots.filter((b) => b.state === 'failed').length,
+        lostBots: bots.filter((b) => b.state === 'lost').length,
+        joinSeconds: bots.flatMap((b) => (b.joinSeconds !== undefined ? [b.joinSeconds] : [])),
+        samples: this.recent,
+        windowSeconds: LIVE_WINDOW_MS / 1000,
+        prometheus: [],
+        expect: { audio: false, video: false },
+      },
+      this.record.scenario.slo,
+    );
+  }
+
   status(): LiveStatus {
     const byState: Record<string, number> = {};
     for (const bot of this.bots.values()) byState[bot.state] = (byState[bot.state] ?? 0) + 1;
+    const quality = this.liveQuality();
     return {
       registered: this.bots.size,
       expected: this.slots.length,
@@ -125,6 +172,7 @@ export class Run {
       ...(this.live.step !== undefined ? { currentStep: this.live.step } : {}),
       ...(this.live.users !== undefined ? { usersPerMeeting: this.live.users } : {}),
       ...(this.live.phase !== undefined ? { stepPhase: this.live.phase } : {}),
+      ...(quality ? { quality } : {}),
     };
   }
 
@@ -157,6 +205,7 @@ export class Run {
       joinUrl: `${this.target.apiUrl.replace(/\/+$/, '')}/join?${query}&checksum=${checksum}`,
       role: slot.role,
       network,
+      ...(this.opts.selfTest ? { probe: true } : {}),
     };
   }
 
@@ -173,8 +222,12 @@ export class Run {
     bot.state = hb.state;
     if (hb.error) bot.error = hb.error;
     if (hb.joinSeconds !== undefined) bot.joinSeconds = hb.joinSeconds;
-    if (hb.sample && this.collecting && bot.state === 'joined') {
-      this.samples.push({ botId: bot.botId, sample: hb.sample });
+    if (hb.missingSelectors?.length) {
+      this.record.missingSelectors = [...new Set([...(this.record.missingSelectors ?? []), ...hb.missingSelectors])];
+    }
+    if (hb.sample && bot.state === 'joined') {
+      this.recent.push({ at: Date.now(), botId: bot.botId, sample: hb.sample });
+      if (this.collecting) this.samples.push({ botId: bot.botId, sample: hb.sample });
     }
 
     if (!bot.slot || this.record.phase === 'stopping' || this.finished) return { command: 'stop' };
@@ -217,7 +270,7 @@ export class Run {
   }
 
   private async createMeetings(): Promise<void> {
-    const { scenario } = this.record;
+    const scenario = this.fullScenario;
     const maxMinutes = Math.ceil(maxRunSeconds(scenario) / 60);
     for (let m = 0; m < scenario.meetings; m++) {
       await this.bbb.create(
@@ -327,6 +380,7 @@ export class Run {
     const active = this.activeBots(step);
     const meetingInfo = await this.meetingInfos();
     const seats = this.slots.filter((s) => s.step <= step);
+    const serverMetrics = await this.prometheusValues();
     const result = evaluateStep(
       {
         expectedBots: users * meetings,
@@ -335,7 +389,7 @@ export class Run {
         joinSeconds: active.flatMap((b) => (b.joinSeconds !== undefined ? [b.joinSeconds] : [])),
         samples: this.samples,
         windowSeconds: load.holdSeconds,
-        prometheus: await this.prometheusValues(),
+        prometheus: serverMetrics,
         expect: {
           // Only a speaker guarantees packets: LiveKit stays silent while nobody talks.
           audio: seats.length > 1 && seats.some((s) => s.role.audio === 'microphone' && !s.role.muted),
@@ -357,6 +411,7 @@ export class Run {
     );
     return {
       ...result,
+      ...(serverMetrics.length ? { serverMetrics } : {}),
       usersPerMeeting: users,
       totalUsers: users * meetings,
       meetingInfo,
@@ -418,10 +473,14 @@ export class Run {
     }
 
     const failures = this.failureSummary();
-    if (failures) this.log(t('run.botErrors', { errors: failures }));
+    if (failures) {
+      this.record.botErrors = failures;
+      this.log(t('run.botErrors', { errors: failures }));
+    }
     await this.teardown();
     this.record.outcome = outcome;
     this.record.finishedAt = new Date().toISOString();
+    if (this.opts.selfTest) this.record.selfTest = this.opts.selfTest(this.record);
     this.record.phase = 'finished';
     this.log(t('run.finished', { outcome }));
     await this.persist(this.record);
@@ -440,6 +499,12 @@ export class Run {
 }
 
 class AbortError extends Error {}
+
+function withoutFileContent(scenario: Scenario): Scenario {
+  const file = scenario.meeting.presentationFile;
+  if (!file) return scenario;
+  return { ...scenario, meeting: { ...scenario.meeting, presentationFile: { name: file.name, base64: '' } } };
+}
 
 function presentationOf({ meeting }: Scenario): PresentationSource | undefined {
   if (meeting.presentationFile) return meeting.presentationFile;

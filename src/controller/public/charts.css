@@ -1,0 +1,46 @@
+.viz-root{--surface-1:#fcfcfb;--text-primary:#0b0b0b;--text-secondary:#52514e;--hairline:#e4e3df;--series-1:#2a78d6;--series-2:#eb6834;--series-3:#1baf7a;--series-4:#eda100;--series-5:#e87ba4;--series-6:#008300;--series-7:#6250d6;--series-8:#e34948;--critical:#d03b3b;--warning:#fab219;color:var(--text-primary)}
+@media (prefers-color-scheme:dark){:root:where(:not([data-theme="light"])) .viz-root{--surface-1:#1a1a19;--text-primary:#f0efec;--text-secondary:#c3c2b7;--hairline:#333330;--series-1:#3987e5;--series-2:#d95926;--series-3:#199e70;--series-4:#c98500;--series-5:#d55181;--series-6:#008300;--series-7:#9085e9;--series-8:#e66767}}
+:root[data-theme="dark"] .viz-root{--surface-1:#1a1a19;--text-primary:#f0efec;--text-secondary:#c3c2b7;--hairline:#333330;--series-1:#3987e5;--series-2:#d95926;--series-3:#199e70;--series-4:#c98500;--series-5:#d55181;--series-6:#008300;--series-7:#9085e9;--series-8:#e66767}
+.viz-root .chart-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:12px}
+.viz-root .chart{margin:0;padding:12px;background:var(--surface-1);border:1px solid var(--hairline);border-radius:8px;position:relative;break-inside:avoid}
+.viz-root figcaption{font-size:13px;font-weight:600;margin-bottom:6px;color:var(--text-primary)}
+.viz-root figcaption span{font-weight:400;color:var(--text-secondary)}
+.viz-root .chart>svg{display:block;width:100%;height:auto;touch-action:pan-y;outline-offset:2px}
+.viz-root .grid{stroke:var(--hairline);stroke-width:1}
+.viz-root .tick,.viz-root .limit-label{font:11px system-ui,sans-serif;fill:var(--text-secondary)}
+.viz-root .limit{stroke:var(--text-secondary);stroke-width:1;stroke-dasharray:4 3}
+.viz-root .line{fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.viz-root .dot{stroke:var(--surface-1);stroke-width:2}
+.viz-root .ring{fill:none;stroke-width:2}
+.viz-root .ring-fail{stroke:var(--critical)}
+.viz-root .ring-invalid{stroke:var(--warning);stroke-dasharray:3 2}
+.viz-root .crosshair{stroke:var(--text-secondary);stroke-width:1;visibility:hidden}
+.viz-root .line.s1{stroke:var(--series-1)}.viz-root .dot.s1{fill:var(--series-1)}
+.viz-root .line.s2{stroke:var(--series-2)}.viz-root .dot.s2{fill:var(--series-2)}
+.viz-root .line.s3{stroke:var(--series-3)}.viz-root .dot.s3{fill:var(--series-3)}
+.viz-root .line.s4{stroke:var(--series-4)}.viz-root .dot.s4{fill:var(--series-4)}
+.viz-root .line.s5{stroke:var(--series-5)}.viz-root .dot.s5{fill:var(--series-5)}
+.viz-root .line.s6{stroke:var(--series-6)}.viz-root .dot.s6{fill:var(--series-6)}
+.viz-root .line.s7{stroke:var(--series-7)}.viz-root .dot.s7{fill:var(--series-7)}
+.viz-root .line.s8{stroke:var(--series-8)}.viz-root .dot.s8{fill:var(--series-8)}
+.viz-root .legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin:0 0 10px;font-size:13px;color:var(--text-secondary)}
+.viz-root .key{display:inline-flex;align-items:center;gap:6px}
+.viz-root .muted{color:var(--text-secondary)}
+.viz-root .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin:0 0 14px}
+.viz-root .tile{background:var(--surface-1);border:1px solid var(--hairline);border-radius:8px;padding:10px 12px;min-width:0}
+.viz-root .tile b{display:block;font-size:22px;font-weight:600;overflow-wrap:anywhere;line-height:1.25}
+.viz-root .tile small{color:var(--text-secondary);font-size:12px}
+.chart-tip{position:absolute;z-index:5;pointer-events:none;min-width:130px;max-width:280px;padding:8px 10px;border-radius:6px;border:1px solid var(--hairline);background:var(--surface-1);color:var(--text-primary);font:12px/1.4 system-ui,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.18)}
+.chart-tip .head{color:var(--text-secondary);margin-bottom:4px}
+.chart-tip .row{display:grid;grid-template-columns:14px auto;gap:0 6px;align-items:center}
+.chart-tip .key-line{height:2px;border-radius:1px}
+.chart-tip strong{font-weight:600}
+.chart-tip .note{grid-column:2;color:var(--text-secondary)}
+.chart-tip .label{grid-column:2;color:var(--text-secondary);overflow-wrap:anywhere}
+@media print{.viz-root .crosshair,.chart-tip{display:none}}
+
+.viz-root .selftest-summary{margin:0 0 8px}
+.viz-root .selftest td{white-space:normal;vertical-align:top}
+.viz-root .check{font-weight:600;white-space:nowrap}
+.viz-root .check.fail{color:var(--critical)}
+.viz-root .hint{color:var(--text-secondary)}
