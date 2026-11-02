@@ -175,9 +175,8 @@ node scripts/check-selectors.mjs                 # newest stable release of each
 node scripts/check-selectors.mjs v3.0.40 v4.0.1  # specific releases
 ```
 
-It exits with an error if something is missing. To run it every Monday and when the selectors change, copy
-[dev/github-workflows/selector-check.yml](dev/github-workflows/selector-check.yml) to `.github/workflows/`. Pushing that
-needs a token with the *Workflows* permission. The selectors live in [src/bot/selectors.ts](src/bot/selectors.ts).
+It exits with an error if something is missing. [.github/workflows/selector-check.yml](.github/workflows/selector-check.yml)
+runs it every Monday and when the selectors change. The selectors live in [src/bot/selectors.ts](src/bot/selectors.ts).
 
 ## Networks without UDP
 

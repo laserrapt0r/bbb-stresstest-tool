@@ -181,9 +181,8 @@ node scripts/check-selectors.mjs                 # neueste stabile Version jeder
 node scripts/check-selectors.mjs v3.0.40 v4.0.1  # bestimmte Versionen
 ```
 
-Fehlt etwas, endet es mit einem Fehler. Damit es jeden Montag und bei geänderten Selektoren läuft, muss
-[dev/github-workflows/selector-check.yml](dev/github-workflows/selector-check.yml) nach `.github/workflows/` kopiert
-werden. Der Push dafür braucht einen Token mit der Berechtigung *Workflows*. Die Selektoren stehen in
+Fehlt etwas, endet es mit einem Fehler. [.github/workflows/selector-check.yml](.github/workflows/selector-check.yml)
+führt es jeden Montag aus und wenn sich die Selektoren ändern. Die Selektoren stehen in
 [src/bot/selectors.ts](src/bot/selectors.ts).
 
 ## Netzwerk ohne UDP

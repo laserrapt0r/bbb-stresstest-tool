@@ -7,6 +7,7 @@ on:
   workflow_dispatch:
   push:
     paths:
+      - .github/workflows/selector-check.yml
       - src/bot/selectors.ts
       - scripts/check-selectors.mjs
 
