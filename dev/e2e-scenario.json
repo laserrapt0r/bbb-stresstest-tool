@@ -1,0 +1,6 @@
+{"name":"e2e","target":"testserver","meetings":1,
+ "roles":[{"name":"presenter","count":1,"moderator":true,"audio":"microphone","screenshare":true},
+          {"name":"camera","count":1,"audio":"listen","webcam":true},
+          {"name":"listener","fill":true,"audio":"listen"}],
+ "load":{"mode":"steps","startUsers":2,"stepUsers":1,"maxUsers":3,"joinPerSecond":1,"holdSeconds":25,"settleSeconds":5},
+ "slo":{"maxBotCpuPct":99,"maxBotThrottledPct":100}}

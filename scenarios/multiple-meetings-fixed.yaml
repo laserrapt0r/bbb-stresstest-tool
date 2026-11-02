@@ -1,0 +1,11 @@
+name: 10 Sitzungen mit je 30 Nutzern
+nameEn: 10 meetings with 30 users each
+description: Feste Last über mehrere Sitzungen, z. B. für einen Vorlesungsbetrieb.
+descriptionEn: Fixed load across several meetings, for example regular lectures.
+target: testserver
+meetings: 10
+roles:
+  - { name: lecturer, count: 1, moderator: true, audio: microphone, webcam: true, nextSlideEverySeconds: 60 }
+  - { name: camera, count: 4, audio: microphone, webcam: true }
+  - { name: listener, fill: true, audio: listen }
+load: { mode: fixed, usersPerMeeting: 30, joinPerSecond: 3, holdSeconds: 1200, settleSeconds: 60 }

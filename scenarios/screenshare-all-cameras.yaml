@@ -1,0 +1,10 @@
+name: Screenshare, alle mit Kamera und Mikrofon
+nameEn: Screen share, everybody with camera and microphone
+description: Eine Person teilt den Desktop, alle anderen teilen Kamera und Audio.
+descriptionEn: One person shares the desktop, everybody else shares camera and audio.
+target: testserver
+meetings: 1
+roles:
+  - { name: presenter, count: 1, moderator: true, audio: microphone, screenshare: true }
+  - { name: participant, fill: true, audio: microphone, webcam: true }
+load: { mode: steps, startUsers: 5, stepUsers: 5, maxUsers: 50, joinPerSecond: 0.5, holdSeconds: 180, settleSeconds: 30 }

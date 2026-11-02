@@ -1,0 +1,68 @@
+image:
+  controller: registry.example.org/bbb-stress/controller:0.1.0
+  bot: registry.example.org/bbb-stress/bot:0.1.0
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+# Secret with the key config.yaml. Leave empty to let the chart create one from "config".
+# Recommended for Git/GitOps: create the secret separately, so no secrets end up in the repo.
+existingSecret: ""
+
+config:
+  adminToken: ""        # at least 16 characters, e.g. openssl rand -hex 24
+  language: en          # de or en: run logs, step reasons and API errors
+  maxBotsPerRun: 500
+  botStartTimeoutSeconds: 600
+  prometheusUrl: ""     # e.g. http://prometheus-operated.cattle-monitoring-system:9090
+  grafanaUrl: ""
+  targets: {}
+  # targets:
+  #   testserver:
+  #     apiUrl: https://scalelite.example.org/bigbluebutton/api
+  #     secret: SECRET
+  #     checksum: sha256
+  #     description: BBB test server
+  #     proxy:
+  #       server: http://proxy.example.org:3128
+  #       bypass: ""
+  #       username: ""
+  #       password: ""
+  #     # Without UDP: media runs over TURN/TCP or TURNS through the proxy.
+  #     webrtcIpPolicy: disable_non_proxied_udp
+
+# Secret with the key ca.crt, if BBB or Prometheus use a certificate of an internal CA.
+caSecret: ""
+
+# Address under which bots reach the controller. Empty: internal service.
+publicUrl: ""
+
+bots:
+  # Reserved nodes keep other workloads out of the measurement.
+  nodeSelector: {}
+  tolerations: []
+  runAsUser: 1001
+
+controller:
+  resources:
+    requests: { cpu: 200m, memory: 256Mi }
+    limits: { cpu: "1", memory: 512Mi }
+  nodeSelector: {}
+  tolerations: []
+
+persistence:
+  size: 1Gi
+  storageClass: ""
+
+service:
+  port: 8080
+
+ingress:
+  enabled: false
+  className: ""
+  host: bbb-stress.example.org
+  tlsSecret: ""
+  annotations: {}
+
+serviceMonitor:
+  enabled: false
+  labels: {}

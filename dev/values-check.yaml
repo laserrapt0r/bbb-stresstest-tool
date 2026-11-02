@@ -1,0 +1,14 @@
+config:
+  adminToken: "0123456789abcdef0123"
+  targets:
+    testserver:
+      apiUrl: https://bbb.example.org/bigbluebutton/api
+      secret: geheim
+      proxy: { server: "http://proxy.example.org:3128" }
+      webrtcIpPolicy: disable_non_proxied_udp
+caSecret: interne-ca
+ingress: { enabled: true, host: stress.example.org, tlsSecret: stress-tls }
+serviceMonitor: { enabled: true }
+bots:
+  nodeSelector: { pool: loadtest }
+  tolerations: [{ key: loadtest, operator: Exists, effect: NoSchedule }]

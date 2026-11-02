@@ -1,0 +1,6 @@
+apiVersion: v2
+name: bbb-stress-tool
+description: Load tests for BigBlueButton with real browser clients
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

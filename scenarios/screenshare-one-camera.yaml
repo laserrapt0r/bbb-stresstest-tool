@@ -1,0 +1,11 @@
+name: Screenshare + 1 Kamera, Zuhörer steigern
+nameEn: Screen share + 1 camera, growing audience
+description: Eine Person teilt den Desktop, eine Kamera ist an, alle anderen hören zu.
+descriptionEn: One person shares the desktop, one camera is on, everybody else listens.
+target: testserver
+meetings: 1
+roles:
+  - { name: presenter, count: 1, moderator: true, audio: microphone, screenshare: true }
+  - { name: camera, count: 1, audio: listen, webcam: true }
+  - { name: listener, fill: true, audio: listen }
+load: { mode: steps, startUsers: 10, stepUsers: 10, maxUsers: 100, joinPerSecond: 1, holdSeconds: 180, settleSeconds: 30 }

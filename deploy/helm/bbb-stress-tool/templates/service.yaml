@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "bbb-stress.name" . }}
+  labels: {{- include "bbb-stress.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "bbb-stress.selector" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http

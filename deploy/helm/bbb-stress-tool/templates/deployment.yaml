@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "bbb-stress.name" . }}
+  labels: {{- include "bbb-stress.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  # Only one instance may own the data and control running tests.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {{- include "bbb-stress.selector" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "bbb-stress.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "bbb-stress.name" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      {{- with .Values.controller.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controller.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: controller
+          image: {{ .Values.image.controller | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+          {{- if .Values.caSecret }}
+          env:
+            - name: NODE_EXTRA_CA_CERTS
+              value: /etc/bbb-stress-ca/ca.crt
+          {{- end }}
+          resources: {{- toYaml .Values.controller.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/bbb-stress
+              readOnly: true
+            - name: data
+              mountPath: /data
+            {{- if .Values.caSecret }}
+            - name: ca
+              mountPath: /etc/bbb-stress-ca
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ include "bbb-stress.secret" . }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "bbb-stress.name" . }}
+        {{- if .Values.caSecret }}
+        - name: ca
+          secret:
+            secretName: {{ .Values.caSecret }}
+        {{- end }}

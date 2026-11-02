@@ -1,0 +1,30 @@
+# Dependencies and build output
+node_modules/
+dist/
+
+# Local data and logs
+data/
+*.log
+
+# Secrets and local configuration: never commit these
+.env
+.env.*
+config.yaml
+*.local.yaml
+*.pem
+*.key
+*.crt
+dev/proxy-spike/.certs/
+
+# Large local artifacts
+*.tar
+*.qcow2
+*.img
+*.iso
+*.y4m
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

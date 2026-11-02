@@ -1,0 +1,13 @@
+# Only for dev/e2e.sh against fake-bbb.
+adminToken: e2e-admin-token-1234
+language: en
+publicUrl: http://localhost:8080
+dataDir: /data
+scenarioDir: /app/scenarios
+botStartTimeoutSeconds: 120
+backend: { type: external }
+targets:
+  testserver:
+    apiUrl: http://localhost:8090/bigbluebutton/api
+    secret: fake-secret
+    checksum: sha256
